@@ -19,6 +19,24 @@ struct MacphinApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // AppKit sends "reveal" ('misc'/'mvis') when NSFileViewer points at Macphin.
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleReveal(_:reply:)),
+            forEventClass: AEEventClass(kAEMiscStandards), andEventID: AEEventID(0x6D76_6973))
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        MainActor.assumeIsolated { ExternalOpenRouter.open(urls) }
+    }
+
+    @objc private func handleReveal(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let direct = event.paramDescriptor(forKeyword: keyDirectObject) else { return }
+        let items = direct.numberOfItems > 0 ? (1...direct.numberOfItems).compactMap { direct.atIndex($0) } : [direct]
+        let urls = items.compactMap { $0.coerce(toDescriptorType: typeFileURL)?.fileURLValue }
+        MainActor.assumeIsolated { ExternalOpenRouter.reveal(urls) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)

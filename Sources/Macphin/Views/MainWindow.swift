@@ -6,6 +6,7 @@ struct MainWindow: View {
     @State private var searchText = ""
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
         layout
@@ -23,6 +24,7 @@ struct MainWindow: View {
             .onAppear(perform: attachSession)
             .onDisappear { SessionStore.shared.unregister(window) }
             .onChange(of: scenePhase) { if scenePhase != .active { SessionStore.shared.saveAll() } }
+            .onChange(of: controlActiveState) { if controlActiveState == .key { SessionStore.shared.markActive(window) } }
             .frame(minWidth: 700, minHeight: 420)
     }
 
@@ -79,6 +81,8 @@ struct MainWindow: View {
             window.restore(session)
         }
         sessions.register(window)
+        sessions.markActive(window)
+        ExternalOpenRouter.open(sessions.claimExternal())
         if sessions.hasPending { openWindow(id: "main") }
     }
 

@@ -2,6 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+INSTALL=false
+if [[ "${1:-}" == "--install" ]]; then
+  INSTALL=true
+  shift
+fi
 CONFIG="${1:-release}"
 swift build -c "$CONFIG"
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
@@ -29,6 +34,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Folder</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>public.folder</string></array>
+    </dict>
+  </array>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSDesktopFolderUsageDescription</key><string>Macphin needs access to your Desktop to browse and manage files there.</string>
@@ -66,3 +80,11 @@ sign_app() {
 
 sign_app >/dev/null
 echo "Built $APP"
+
+if $INSTALL; then
+  pkill -x Macphin 2>/dev/null || true
+  rm -rf /Applications/Macphin.app
+  cp -R "$APP" /Applications/Macphin.app
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Macphin.app
+  echo "Installed /Applications/Macphin.app"
+fi

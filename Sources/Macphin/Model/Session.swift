@@ -32,6 +32,8 @@ final class SessionStore {
     private var pending: [WindowSession]
     private var windows: [WindowState] = []
     private var detachedTabs: [TabState] = []
+    private var externalURLs: [URL] = []
+    private weak var lastActiveWindow: WindowState?
 
     private init() {
         guard Settings.restoreSession, Snapshotter.outputDirectory == nil,
@@ -45,6 +47,16 @@ final class SessionStore {
 
     var hasPending: Bool { !pending.isEmpty }
     var firstWindow: WindowState? { windows.first }
+    var activeWindow: WindowState? { lastActiveWindow ?? windows.first }
+
+    func markActive(_ window: WindowState) { lastActiveWindow = window }
+
+    func queueExternal(_ urls: [URL]) { externalURLs += urls }
+
+    func claimExternal() -> [URL] {
+        defer { externalURLs = [] }
+        return externalURLs
+    }
 
     func detach(_ tab: TabState) { detachedTabs.append(tab) }
 

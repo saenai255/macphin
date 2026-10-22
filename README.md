@@ -41,6 +41,10 @@ The first `./build-app.sh` creates a self-signed "Macphin Local Signing" certifi
 
 For UI checks without screen-recording permission, `MACPHIN_SNAPSHOT_DIR=/some/dir build/Macphin.app/Contents/MacOS/Macphin` renders a scripted tour of the UI to PNG files (optionally start in a folder with `MACPHIN_SNAPSHOT_START`). It uses separate preferences and does not change your settings.
 
+## Using Macphin instead of Finder
+
+Install it with `./build-app.sh --install` (copies to /Applications), then turn on **Settings → Use Macphin instead of Finder**. Folders opened from other apps, the Dock and `open` in Terminal then open in Macphin, and apps send "Show in Finder" here after they are relaunched. Finder itself keeps running because macOS needs it for the Desktop and Trash. Turning the setting off hands everything back to Finder. **Open Macphin at login** is in the same section.
+
 ## Keyboard shortcuts
 
 | Action | Shortcut |
