@@ -76,7 +76,9 @@ PLIST
 
 sign_app() {
   if [[ -n "${MACPHIN_SIGN_IDENTITY:-}" ]]; then
-    codesign --force --deep --sign "$MACPHIN_SIGN_IDENTITY" --identifier dev.macphin.Macphin ${KEYCHAIN:+--keychain "$KEYCHAIN"} "$APP"
+    local keychain_flags=()
+    [[ -n "${KEYCHAIN:-}" ]] && keychain_flags=(--keychain "$KEYCHAIN")
+    codesign --force --deep --sign "$MACPHIN_SIGN_IDENTITY" --identifier dev.macphin.Macphin "${keychain_flags[@]}" "$APP"
     return
   fi
   if ! ./scripts/setup-signing.sh; then
