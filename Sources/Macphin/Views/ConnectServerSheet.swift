@@ -65,6 +65,12 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Toggle("Restore windows and tabs from the previous session", isOn: $restoreSession)
+            Section("Privacy") {
+                Text("Folders like Mail, Safari or other apps’ data need Full Disk Access to open in Macphin.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Full Disk Access Settings…") { Privacy.openFullDiskAccessSettings() }
+            }
         }
         .padding(20)
         .frame(width: 440)

@@ -24,12 +24,14 @@ struct Actions {
         let sources = urls.filter { $0.standardizedFileURL != directory.standardizedFileURL }
         guard !sources.isEmpty else { return }
         let window = self.window
+        let subject = sources.count == 1 ? "“\(sources[0].lastPathComponent)”" : "\(sources.count) items"
+        let title = "\(move ? "Moving" : "Copying") \(subject) to “\(directory.lastPathComponent)”"
         let run: (ConflictPolicy) -> Void = { policy in
-            window.perform(move ? "Move" : "Copy") { log in
+            window.perform(move ? "Move" : "Copy", title: title) { log, progress in
                 if move {
-                    try FileOperations.move(sources, to: directory, policy: policy, log: log)
+                    try FileOperations.move(sources, to: directory, policy: policy, log: log, progress: progress)
                 } else {
-                    try FileOperations.copy(sources, to: directory, policy: policy, log: log)
+                    try FileOperations.copy(sources, to: directory, policy: policy, log: log, progress: progress)
                 }
             }
         }
@@ -76,7 +78,9 @@ struct Actions {
 
     func duplicate() {
         let urls = selectedURLs
-        window.perform("Duplicate") { try FileOperations.duplicate(urls, log: $0) }
+        window.perform("Duplicate", title: "Duplicating \(urls.count) item\(urls.count == 1 ? "" : "s")") {
+            try FileOperations.duplicate(urls, log: $0, progress: $1)
+        }
     }
 
     func trash(_ explicitURLs: [URL]? = nil) {
@@ -86,7 +90,9 @@ struct Actions {
             window.pendingDelete = urls
             return
         }
-        window.perform("Move to Trash") { try FileOperations.trash(urls, log: $0) }
+        window.perform("Move to Trash", title: "Moving \(urls.count) item\(urls.count == 1 ? "" : "s") to the Trash") {
+            try FileOperations.trash(urls, log: $0, progress: $1)
+        }
     }
 
     func deletePermanently() {
@@ -98,7 +104,9 @@ struct Actions {
     func compress() {
         let urls = selectedURLs
         guard !urls.isEmpty else { return }
-        window.perform("Compress") { try FileOperations.compress(urls, log: $0) }
+        window.perform("Compress", title: "Compressing \(urls.count) item\(urls.count == 1 ? "" : "s")") { log, _ in
+            try FileOperations.compress(urls, log: log)
+        }
     }
 
     func undo() { FileUndoStack.shared.undo { window.errorMessage = $0 } }

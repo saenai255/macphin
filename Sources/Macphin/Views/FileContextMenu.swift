@@ -42,6 +42,7 @@ struct FileContextMenu: View {
     }
 
     @ViewBuilder private var itemMenu: some View {
+        let quickActions = QuickActions.available()
         Button("Open") { pane.openSelection() }
         if selected.contains(where: \.opensAsFolder) {
             Button("Open in New Tab") { actions.openInNewTab() }
@@ -67,6 +68,23 @@ struct FileContextMenu: View {
         Button("Compress") { actions.compress() }
         Button("Copy Location") { actions.copyPath() }
         Button("Show in Finder") { actions.revealInFinder() }
+        ShareLink(items: pane.selectedItems.map(\.url)) { Label("Share…", systemImage: "square.and.arrow.up") }
+        if !quickActions.isEmpty {
+            Menu("Quick Actions") {
+                ForEach(quickActions) { action in
+                    Button(action.name) {
+                        let urls = selected.map(\.url)
+                        Task { @MainActor in
+                            do {
+                                try await QuickActions.run(action, on: urls)
+                            } catch {
+                                window.errorMessage = error.localizedDescription
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Button("Quick Look") { pane.quickLookURL = selected.first?.url }
         Divider()
         Button("Move to Trash") { actions.trash() }

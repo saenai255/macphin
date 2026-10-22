@@ -72,24 +72,46 @@ private struct PlaceRow: View {
     let window: WindowState
     @State private var isTargeted = false
 
+    private var capacity: (used: Double, description: String)? {
+        guard let total = place.totalCapacity, let available = place.availableCapacity, total > 0 else { return nil }
+        let used = Double(total - min(max(available, 0), total)) / Double(total)
+        let free = ByteCountFormatter.string(fromByteCount: max(0, available), countStyle: .file)
+        let size = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+        return (used, "\(free) free of \(size)")
+    }
+
     var body: some View {
-        HStack {
-            Label(place.name, systemImage: place.symbol)
-            Spacer()
-            if place.isEjectable {
-                Button { window.run { try PlacesStore.shared.eject(place) } } label: {
-                    Image(systemName: "eject.fill").font(.caption)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label(place.name, systemImage: place.symbol)
+                Spacer()
+                if place.isEjectable {
+                    Button { window.run { try PlacesStore.shared.eject(place) } } label: {
+                        Image(systemName: "eject.fill").font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Eject")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Eject")
+            }
+            if let capacity {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.secondary.opacity(0.2))
+                        Capsule()
+                            .fill(capacity.used > 0.9 ? Color.red : Color.accentColor)
+                            .frame(width: proxy.size.width * capacity.used)
+                    }
+                }
+                .frame(height: 3)
+                .help(capacity.description)
             }
         }
         .tag(place.url.standardizedFileURL)
         .listRowBackground(isTargeted ? RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(0.25)) : nil)
         .dropDestination(for: URL.self) { urls, _ in
             if place.url.standardizedFileURL == PlacesStore.trashURL.standardizedFileURL {
-                window.run { try FileOperations.trash(urls) }
+                Actions(window: window).trash(urls)
                 return true
             }
             return Actions(window: window).drop(urls, into: place.url)

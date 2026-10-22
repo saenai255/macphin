@@ -7,6 +7,7 @@ final class TabState: Identifiable {
     let id = UUID()
     var panes: [PaneState]
     var activePaneIndex = 0
+    var splitFraction: CGFloat = 0.5
 
     init(url: URL) { panes = [PaneState(url: url)] }
 
@@ -112,6 +113,30 @@ final class WindowState {
         if target == activeTabID { activeTabID = tabs[min(index, tabs.count - 1)].id }
     }
 
+    func removeTab(_ id: UUID) -> TabState? {
+        guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
+        let tab = tabs.remove(at: index)
+        if id == activeTabID { activeTabID = tabs[min(index, tabs.count - 1)].id }
+        return tab
+    }
+
+    func insertTab(_ tab: TabState, before targetID: UUID?) {
+        let index = targetID.flatMap { id in tabs.firstIndex { $0.id == id } } ?? tabs.count
+        tabs.insert(tab, at: index)
+        activeTabID = tab.id
+    }
+
+    func moveTab(_ id: UUID, before targetID: UUID) {
+        guard id != targetID, let from = tabs.firstIndex(where: { $0.id == id }),
+              let to = tabs.firstIndex(where: { $0.id == targetID }) else { return }
+        tabs.insert(tabs.remove(at: from), at: to)
+    }
+
+    func adopt(_ tab: TabState) {
+        tabs = [tab]
+        activeTabID = tab.id
+    }
+
     func cycleTab(by offset: Int) {
         guard let index = tabs.firstIndex(where: { $0.id == activeTabID }) else { return }
         activeTabID = tabs[(index + offset + tabs.count) % tabs.count].id
@@ -130,14 +155,23 @@ final class WindowState {
         }
     }
 
-    // Partial work is still registered for undo when the operation fails.
-    func perform(_ name: String, _ operation: @escaping @Sendable (ChangeLog) throws -> Void) {
+    // Partial work is still registered for undo when the operation fails or is cancelled.
+    func perform(_ name: String, title: String? = nil,
+                 _ operation: @escaping @Sendable (ChangeLog, OperationProgress) throws -> Void) {
+        let job = JobCenter.shared.start(title ?? name)
+        let progress = job.progress
         Task.detached {
             let log = ChangeLog()
             var message: String?
-            do { try operation(log) } catch { message = error.localizedDescription }
+            do {
+                try operation(log, progress)
+            } catch is CancellationError {
+            } catch {
+                message = error.localizedDescription
+            }
             let change = log.combined, failure = message
             await MainActor.run {
+                JobCenter.shared.finish(job)
                 FileUndoStack.shared.register(name, change)
                 if let failure { self.errorMessage = failure }
             }
@@ -168,7 +202,10 @@ final class WindowState {
 }
 
 enum Settings {
-    private static let defaults = UserDefaults.standard
+    // Snapshot runs must not leave their scripted layout in the user's preferences.
+    private static let defaults = ProcessInfo.processInfo.environment["MACPHIN_SNAPSHOT_DIR"] == nil
+        ? UserDefaults.standard
+        : UserDefaults(suiteName: "dev.macphin.Macphin.snapshot") ?? .standard
 
     static var viewMode: ViewMode {
         get { ViewMode(rawValue: defaults.string(forKey: "viewMode") ?? "") ?? .icons }

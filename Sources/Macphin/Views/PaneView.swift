@@ -40,7 +40,11 @@ struct PaneView: View {
 
     @ViewBuilder private var content: some View {
         if let error = pane.loadError {
-            ContentUnavailableView("Cannot Open Folder", systemImage: "exclamationmark.triangle", description: Text(error))
+            if pane.loadErrorIsPermission {
+                permissionError
+            } else {
+                ContentUnavailableView("Cannot Open Folder", systemImage: "exclamationmark.triangle", description: Text(error))
+            }
         } else if pane.visibleItems.isEmpty && !pane.isLoading {
             ContentUnavailableView(
                 pane.isSearching ? "No Results" : pane.filterText.isEmpty ? "Folder is Empty" : "No Matches",
@@ -52,6 +56,17 @@ struct PaneView: View {
             case .compact: CompactView(pane: pane, window: window)
             case .details: DetailsView(pane: pane, window: window)
             }
+        }
+    }
+
+    private var permissionError: some View {
+        ContentUnavailableView {
+            Label("No Access to “\(pane.title)”", systemImage: "lock.shield")
+        } description: {
+            Text("macOS privacy protection blocks this folder until Macphin is allowed in System Settings > Privacy & Security (Full Disk Access, or Files and Folders).")
+        } actions: {
+            Button("Open Privacy Settings") { Privacy.openFullDiskAccessSettings() }
+            Button("Try Again") { pane.reload() }
         }
     }
 
@@ -127,13 +142,17 @@ struct StatusBar: View {
     private var summary: String {
         let selected = pane.selectedItems
         if selected.count == 1 { return selected[0].name + (selected[0].opensAsFolder ? "" : " (\(selected[0].formattedSize))") }
-        if !selected.isEmpty { return "\(selected.count) selected (\(totalSize(selected)))" }
-        let items = pane.visibleItems
-        let folders = items.filter(\.opensAsFolder).count
-        let files = items.count - folders
+        if !selected.isEmpty {
+            let hasFiles = selected.contains { !$0.opensAsFolder }
+            return "\(selected.count) selected" + (hasFiles ? " (\(totalSize(selected)))" : "")
+        }
+        let stats = pane.visibleStats
+        let folders = stats.folders, files = stats.files
         var parts: [String] = []
         if folders > 0 { parts.append("\(folders) folder\(folders == 1 ? "" : "s")") }
-        if files > 0 { parts.append("\(files) file\(files == 1 ? "" : "s") (\(totalSize(items)))") }
+        if files > 0 {
+            parts.append("\(files) file\(files == 1 ? "" : "s") (\(ByteCountFormatter.string(fromByteCount: stats.bytes, countStyle: .file)))")
+        }
         return parts.isEmpty ? "Empty" : parts.joined(separator: ", ")
     }
 

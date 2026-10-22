@@ -31,6 +31,7 @@ struct TerminalPanel: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ terminal: LocalProcessTerminalView, coordinator: Coordinator) {
+        coordinator.stop()
         terminal.terminate()
     }
 
@@ -42,8 +43,39 @@ struct TerminalPanel: NSViewRepresentable {
 
         init(pane: PaneState) { self.pane = pane }
 
+        func stop() {
+            retryTimer?.invalidate()
+            retryTimer = nil
+        }
+
+        private var pendingDirectory: URL?
+        private var retryTimer: Timer?
+
         func sync(to url: URL) {
-            guard url != lastDirectory, let terminal else { return }
+            guard url != lastDirectory else { return }
+            pendingDirectory = url
+            flushPendingDirectory()
+        }
+
+        // Only cd when the shell owns the foreground, so a running program never receives the command.
+        private var shellIsIdle: Bool {
+            guard let process = terminal?.process, process.running else { return false }
+            return tcgetpgrp(process.childfd) == process.shellPid
+        }
+
+        private func flushPendingDirectory() {
+            guard let url = pendingDirectory, let terminal else { return }
+            guard shellIsIdle else {
+                if retryTimer == nil {
+                    retryTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.flushPendingDirectory() }
+                    }
+                }
+                return
+            }
+            retryTimer?.invalidate()
+            retryTimer = nil
+            pendingDirectory = nil
             lastDirectory = url
             let escaped = url.path.replacingOccurrences(of: "'", with: "'\\''")
             terminal.send(txt: " cd '\(escaped)'\r")

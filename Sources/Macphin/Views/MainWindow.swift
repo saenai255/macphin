@@ -19,6 +19,7 @@ struct MainWindow: View {
             .focusedSceneValue(\.windowState, window)
             .modifier(WindowDialogs(window: window))
             .overlay(alignment: .bottom) { connectingBadge }
+            .overlay(alignment: .bottomTrailing) { JobsPanel().animation(.default, value: JobCenter.shared.visibleJobs.count) }
             .onAppear(perform: attachSession)
             .onDisappear { SessionStore.shared.unregister(window) }
             .onChange(of: scenePhase) { if scenePhase != .active { SessionStore.shared.saveAll() } }
@@ -54,14 +55,7 @@ struct MainWindow: View {
     }
 
     private var panes: some View {
-        let tab = window.activeTab
-        return HSplitView {
-            ForEach(Array(tab.panes.enumerated()), id: \.element.id) { index, pane in
-                PaneView(pane: pane, window: window, isActive: index == tab.activePaneIndex)
-                    .frame(minWidth: 250)
-            }
-        }
-        .id(tab.id)
+        SplitPanes(tab: window.activeTab, window: window).id(window.activeTab.id)
     }
 
     @ViewBuilder private var connectingBadge: some View {
@@ -79,7 +73,11 @@ struct MainWindow: View {
 
     private func attachSession() {
         let sessions = SessionStore.shared
-        if let session = sessions.claim() { window.restore(session) }
+        if let tab = sessions.claimDetachedTab() {
+            window.adopt(tab)
+        } else if let session = sessions.claim() {
+            window.restore(session)
+        }
         sessions.register(window)
         if sessions.hasPending { openWindow(id: "main") }
     }
@@ -143,7 +141,9 @@ private struct WindowDialogs: ViewModifier {
                 Button("Delete", role: .destructive) {
                     let urls = window.pendingDelete
                     window.pendingDelete = []
-                    window.runAsync { try FileOperations.deletePermanently(urls) }
+                    window.perform("Delete", title: "Deleting \(urls.count) item\(urls.count == 1 ? "" : "s")") { _, progress in
+                        try FileOperations.deletePermanently(urls, progress: progress)
+                    }
                 }
             } message: {
                 Text("This cannot be undone.")

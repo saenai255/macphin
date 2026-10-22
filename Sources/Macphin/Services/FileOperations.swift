@@ -40,6 +40,33 @@ final class ChangeLog: @unchecked Sendable {
     }
 }
 
+final class OperationProgress: @unchecked Sendable {
+    struct Snapshot {
+        var completed: Int64
+        var total: Int64
+        var currentName: String
+        var fraction: Double { total > 0 ? min(1, Double(completed) / Double(total)) : 0 }
+    }
+
+    private let lock = NSLock()
+    private var completed: Int64 = 0
+    private var total: Int64 = 0
+    private var currentName = ""
+    private var cancelled = false
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+    var snapshot: Snapshot { lock.withLock { Snapshot(completed: completed, total: total, currentName: currentName) } }
+
+    func cancel() { lock.withLock { cancelled = true } }
+    func addTotal(_ amount: Int64) { lock.withLock { total += amount } }
+    func advance(_ amount: Int64) { lock.withLock { completed += amount } }
+    func setCurrent(_ name: String) { lock.withLock { currentName = name } }
+
+    func checkCancelled() throws {
+        if isCancelled { throw CancellationError() }
+    }
+}
+
 enum FileOperations {
     static func itemExists(_ url: URL) -> Bool {
         (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
@@ -102,40 +129,142 @@ enum FileOperations {
         return destination
     }
 
-    static func copy(_ urls: [URL], to directory: URL, policy: ConflictPolicy = .keepBoth, log: ChangeLog? = nil) throws {
+    static func copy(_ urls: [URL], to directory: URL, policy: ConflictPolicy = .keepBoth,
+                     log: ChangeLog? = nil, progress: OperationProgress? = nil) throws {
+        progress?.addTotal(urls.reduce(0) { $0 + totalSize(of: $1) })
         for url in urls {
-            guard let destination = try destination(for: url, in: directory, policy: policy, isCopy: true, log: log) else { continue }
-            try FileManager.default.copyItem(at: url, to: destination)
+            try progress?.checkCancelled()
+            guard let destination = try destination(for: url, in: directory, policy: policy, isCopy: true, log: log) else {
+                progress?.advance(totalSize(of: url))
+                continue
+            }
+            try copyItem(at: url, to: destination, progress: progress)
             log?.record(.created([destination]))
         }
     }
 
-    static func move(_ urls: [URL], to directory: URL, policy: ConflictPolicy = .keepBoth, log: ChangeLog? = nil) throws {
+    static func move(_ urls: [URL], to directory: URL, policy: ConflictPolicy = .keepBoth,
+                     log: ChangeLog? = nil, progress: OperationProgress? = nil) throws {
+        let crossVolume = urls.filter { !isSameVolume($0, directory) }
+        progress?.addTotal(crossVolume.reduce(0) { $0 + totalSize(of: $1) } + Int64(urls.count - crossVolume.count))
         for url in urls {
-            guard let destination = try destination(for: url, in: directory, policy: policy, isCopy: false, log: log) else { continue }
-            try FileManager.default.moveItem(at: url, to: destination)
+            try progress?.checkCancelled()
+            guard let destination = try destination(for: url, in: directory, policy: policy, isCopy: false, log: log) else {
+                progress?.advance(crossVolume.contains(url) ? totalSize(of: url) : 1)
+                continue
+            }
+            if crossVolume.contains(url) {
+                try copyItem(at: url, to: destination, progress: progress)
+                try FileManager.default.removeItem(at: url)
+            } else {
+                progress?.setCurrent(url.lastPathComponent)
+                try FileManager.default.moveItem(at: url, to: destination)
+                progress?.advance(1)
+            }
             log?.record(.moved([FileMove(from: url, to: destination)]))
         }
     }
 
-    static func duplicate(_ urls: [URL], log: ChangeLog? = nil) throws {
+    static func duplicate(_ urls: [URL], log: ChangeLog? = nil, progress: OperationProgress? = nil) throws {
+        progress?.addTotal(urls.reduce(0) { $0 + totalSize(of: $1) })
         for url in urls {
+            try progress?.checkCancelled()
             let destination = uniqueURL(for: copyName(for: url), in: url.deletingLastPathComponent())
-            try FileManager.default.copyItem(at: url, to: destination)
+            try copyItem(at: url, to: destination, progress: progress)
             log?.record(.created([destination]))
         }
     }
 
-    static func trash(_ urls: [URL], log: ChangeLog? = nil) throws {
+    static func trash(_ urls: [URL], log: ChangeLog? = nil, progress: OperationProgress? = nil) throws {
+        progress?.addTotal(Int64(urls.count))
         for url in urls {
+            try progress?.checkCancelled()
+            progress?.setCurrent(url.lastPathComponent)
             var resulting: NSURL?
             try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
             if let trashed = resulting as URL? { log?.record(.trashed([FileMove(from: url, to: trashed)])) }
+            progress?.advance(1)
         }
     }
 
-    static func deletePermanently(_ urls: [URL]) throws {
-        for url in urls { try FileManager.default.removeItem(at: url) }
+    static func deletePermanently(_ urls: [URL], progress: OperationProgress? = nil) throws {
+        progress?.addTotal(Int64(urls.count))
+        for url in urls {
+            try progress?.checkCancelled()
+            progress?.setCurrent(url.lastPathComponent)
+            try FileManager.default.removeItem(at: url)
+            progress?.advance(1)
+        }
+    }
+
+    static func totalSize(of url: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
+        guard let values = try? url.resourceValues(forKeys: keys) else { return 0 }
+        guard values.isDirectory == true, values.isSymbolicLink != true else { return Int64(values.fileSize ?? 0) }
+        var total: Int64 = 0
+        let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys))
+        while let child = enumerator?.nextObject() as? URL {
+            total += Int64((try? child.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
+    }
+
+    private static func isSameVolume(_ a: URL, _ b: URL) -> Bool {
+        guard let va = try? a.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject,
+              let vb = try? b.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject else { return true }
+        return va.isEqual(vb)
+    }
+
+    private final class CopyContext {
+        let progress: OperationProgress?
+        var reportedForCurrentFile: Int64 = 0
+
+        init(progress: OperationProgress?) { self.progress = progress }
+    }
+
+    // copyfile clones on APFS, reports byte progress and can be cancelled mid-file.
+    private static func copyItem(at source: URL, to destination: URL, progress: OperationProgress?) throws {
+        let state = copyfile_state_alloc()
+        defer { copyfile_state_free(state) }
+        let context = CopyContext(progress: progress)
+        let callback: copyfile_callback_t = { what, stage, state, source, _, rawContext in
+            guard let rawContext else { return COPYFILE_CONTINUE }
+            let context = Unmanaged<CopyContext>.fromOpaque(rawContext).takeUnretainedValue()
+            guard let progress = context.progress else { return COPYFILE_CONTINUE }
+            if progress.isCancelled { return COPYFILE_QUIT }
+            switch (Int32(what), Int32(stage)) {
+            case (COPYFILE_RECURSE_FILE, COPYFILE_START):
+                context.reportedForCurrentFile = 0
+                if let source { progress.setCurrent((String(cString: source) as NSString).lastPathComponent) }
+            case (COPYFILE_COPY_DATA, COPYFILE_PROGRESS):
+                var copied: off_t = 0
+                copyfile_state_get(state, UInt32(COPYFILE_STATE_COPIED), &copied)
+                progress.advance(Int64(copied) - context.reportedForCurrentFile)
+                context.reportedForCurrentFile = Int64(copied)
+            case (COPYFILE_RECURSE_FILE, COPYFILE_FINISH):
+                var info = stat()
+                if let source, lstat(source, &info) == 0 {
+                    progress.advance(max(0, Int64(info.st_size) - context.reportedForCurrentFile))
+                }
+                context.reportedForCurrentFile = 0
+            default:
+                break
+            }
+            return COPYFILE_CONTINUE
+        }
+        let unmanaged = Unmanaged.passRetained(context)
+        defer { unmanaged.release() }
+        copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CB), unsafeBitCast(callback, to: UnsafeRawPointer.self))
+        copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CTX), unmanaged.toOpaque())
+        let flags = copyfile_flags_t(COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_CLONE | COPYFILE_NOFOLLOW_SRC | COPYFILE_EXCL)
+        guard copyfile(source.path, destination.path, state, flags) == 0 else {
+            let code = errno
+            if progress?.isCancelled == true || code == ECANCELED {
+                try? FileManager.default.removeItem(at: destination)
+                throw CancellationError()
+            }
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO, userInfo: [NSFilePathErrorKey: source.path])
+        }
     }
 
     static func compress(_ urls: [URL], log: ChangeLog? = nil) throws {

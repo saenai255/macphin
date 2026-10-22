@@ -6,6 +6,8 @@ struct Place: Identifiable, Hashable {
     let name: String
     let symbol: String
     var isEjectable = false
+    var totalCapacity: Int64? = nil
+    var availableCapacity: Int64? = nil
     var id: URL { url }
 }
 
@@ -30,6 +32,10 @@ final class PlacesStore {
                 MainActor.assumeIsolated { PlacesStore.shared.refreshDevices() }
             }
         }
+        let timer = Timer(timeInterval: 60, repeats: true) { _ in
+            MainActor.assumeIsolated { PlacesStore.shared.refreshDevices() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     static var trashURL: URL {
@@ -124,7 +130,8 @@ final class PlacesStore {
 
     func refreshDevices() {
         let keys: [URLResourceKey] = [.volumeLocalizedNameKey, .volumeIsEjectableKey, .volumeIsRemovableKey,
-                                      .volumeIsInternalKey, .volumeIsLocalKey]
+                                      .volumeIsInternalKey, .volumeIsLocalKey, .volumeTotalCapacityKey,
+                                      .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey]
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
         devices = urls.compactMap { url in
             let values = try? url.resourceValues(forKeys: Set(keys))
@@ -134,11 +141,16 @@ final class PlacesStore {
             let symbol = isNetwork ? "server.rack"
                 : ejectable ? "externaldrive.badge.minus"
                 : isInternal ? "internaldrive" : "externaldrive"
+            let importantCapacity = values?.volumeAvailableCapacityForImportantUsage ?? 0
+            let available = importantCapacity > 0 ? importantCapacity
+                : values?.volumeAvailableCapacity.map(Int64.init)
             return Place(
                 url: url,
                 name: values?.volumeLocalizedName ?? url.lastPathComponent,
                 symbol: symbol,
-                isEjectable: ejectable || isNetwork || !isInternal)
+                isEjectable: ejectable || isNetwork || !isInternal,
+                totalCapacity: values?.volumeTotalCapacity.map(Int64.init),
+                availableCapacity: available)
         }
     }
 

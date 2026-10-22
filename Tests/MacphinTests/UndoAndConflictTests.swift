@@ -123,3 +123,27 @@ struct UndoAndConflictTests {
         #expect(RemoteMounter.parse("smb://") == nil)
     }
 }
+
+struct ProgressTests {
+    @Test func copyFolderReportsProgressAndCancels() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appending(path: "macphin-progress-\(UUID().uuidString)")
+        let source = root.appending(path: "src")
+        try fm.createDirectory(at: source.appending(path: "nested"), withIntermediateDirectories: true)
+        try Data(count: 300_000).write(to: source.appending(path: "a.bin"))
+        try Data(count: 200_000).write(to: source.appending(path: "nested/b.bin"))
+        let target = try FileOperations.createFolder(in: root, name: "target")
+
+        let progress = OperationProgress()
+        try FileOperations.copy([source], to: target, progress: progress)
+        let snapshot = progress.snapshot
+        #expect(snapshot.total == 500_000)
+        #expect(snapshot.completed == snapshot.total)
+        #expect(fm.fileExists(atPath: target.appending(path: "src/nested/b.bin").path))
+
+        let cancelled = OperationProgress()
+        cancelled.cancel()
+        #expect(throws: CancellationError.self) { try FileOperations.copy([source], to: root, progress: cancelled) }
+        #expect(!fm.fileExists(atPath: root.appending(path: "src copy").path))
+    }
+}

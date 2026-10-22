@@ -6,9 +6,14 @@ import Observation
 final class PaneState: Identifiable {
     let id = UUID()
     private(set) var url: URL
-    private(set) var items: [FileItem] = []
+    private(set) var items: [FileItem] = [] { didSet { refreshVisibleItems() } }
+    private(set) var visibleItems: [FileItem] = []
+    private(set) var visibleStats = ItemStats()
+    private(set) var gitStatus: GitStatusSnapshot? { didSet { gitStatusVersion += 1 } }
+    private(set) var gitStatusVersion = 0
     private(set) var isLoading = false
     private(set) var loadError: String?
+    private(set) var loadErrorIsPermission = false
     var selection: Set<URL> = []
     var viewMode: ViewMode { didSet { Settings.viewMode = viewMode } }
     var sortKey: SortKey = .name { didSet { resort() } }
@@ -16,7 +21,7 @@ final class PaneState: Identifiable {
     var foldersFirst = true { didSet { resort() } }
     var showHidden: Bool { didSet { Settings.showHidden = showHidden; reload() } }
     var zoom: Double { didSet { Settings.zoom = zoom } }
-    var filterText = ""
+    var filterText = "" { didSet { if filterText != oldValue { refreshVisibleItems() } } }
     var isFilterBarVisible = false
     var isEditingLocation = false
     var quickLookURL: URL?
@@ -32,6 +37,10 @@ final class PaneState: Identifiable {
     private var watcher: DirectoryWatcher?
     private var allItems: [FileItem] = []
     private var loadGeneration = 0
+    private var visibleIndex: [URL: Int] = [:]
+    private var pendingReload: DispatchWorkItem?
+    private var typeAheadBuffer = ""
+    private var typeAheadTime = Date.distantPast
 
     init(url: URL, viewMode: ViewMode? = nil) {
         self.url = url
@@ -47,12 +56,38 @@ final class PaneState: Identifiable {
     var canGoForward: Bool { !forwardStack.isEmpty }
     var canGoUp: Bool { url.path != "/" }
 
-    var visibleItems: [FileItem] {
-        guard !filterText.isEmpty else { return items }
-        return items.filter { $0.name.localizedCaseInsensitiveContains(filterText) }
+    var selectedItems: [FileItem] {
+        selection.compactMap { visibleIndex[$0] }.sorted().map { visibleItems[$0] }
     }
 
-    var selectedItems: [FileItem] { visibleItems.filter { selection.contains($0.url) } }
+    func index(of url: URL) -> Int? { visibleIndex[url] }
+
+    private func refreshVisibleItems() {
+        let visible = filterText.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(filterText) }
+        visibleItems = visible
+        var index: [URL: Int] = [:]
+        index.reserveCapacity(visible.count)
+        var stats = ItemStats()
+        for (offset, item) in visible.enumerated() {
+            index[item.url] = offset
+            if item.opensAsFolder { stats.folders += 1 } else { stats.files += 1; stats.bytes += item.size }
+        }
+        visibleIndex = index
+        visibleStats = stats
+    }
+
+    func typeAhead(_ characters: String) {
+        let now = Date()
+        typeAheadBuffer = now.timeIntervalSince(typeAheadTime) < 1 ? typeAheadBuffer + characters : characters
+        typeAheadTime = now
+        let prefix = typeAheadBuffer
+        guard let match = visibleItems.first(where: {
+            $0.name.range(of: prefix, options: [.caseInsensitive, .diacriticInsensitive, .anchored]) != nil
+        }) else { return }
+        selection = [match.url]
+        selectionAnchor = match.url
+        scrollTarget = match.url
+    }
 
     func navigate(to newURL: URL, recordHistory: Bool = true) {
         let target = newURL.standardizedFileURL
@@ -66,6 +101,7 @@ final class PaneState: Identifiable {
         filterText = ""
         selection = []
         renamingURL = nil
+        gitStatus = nil
         load()
     }
 
@@ -106,6 +142,14 @@ final class PaneState: Identifiable {
         load()
     }
 
+    // Coalesces bursts of file system events (e.g. a large copy) into one reload.
+    private func scheduleReload() {
+        pendingReload?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.reload() } }
+        pendingReload = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
     func selectAll() { selection = Set(visibleItems.map(\.url)) }
 
     func toggleQuickLook() {
@@ -140,7 +184,8 @@ final class PaneState: Identifiable {
         let includeHidden = showHidden
         isLoading = true
         loadError = nil
-        watcher = DirectoryWatcher(url: target) { [weak self] in self?.reload() }
+        loadErrorIsPermission = false
+        watcher = DirectoryWatcher(url: target) { [weak self] in self?.scheduleReload() }
 
         Task.detached(priority: .userInitiated) {
             let result: Result<[FileItem], Error>
@@ -157,6 +202,7 @@ final class PaneState: Identifiable {
                 self.isLoading = false
                 switch result {
                 case .success(let loaded):
+                    self.refreshGitStatus(directory: target)
                     self.allItems = loaded
                     self.resort()
                     self.selection = self.selection.intersection(loaded.map(\.url))
@@ -164,6 +210,7 @@ final class PaneState: Identifiable {
                     self.allItems = []
                     self.items = []
                     self.loadError = error.localizedDescription
+                    self.loadErrorIsPermission = Privacy.isPermissionError(error)
                 }
             }
         }
@@ -180,6 +227,7 @@ final class PaneState: Identifiable {
                 ? a.name.localizedStandardCompare(b.name) == .orderedAscending
                 : a.sizeForSort < b.sizeForSort
             case .modified: ordered = a.modified < b.modified
+            case .created: ordered = a.created < b.created
             case .kind: ordered = a.kind == b.kind
                 ? a.name.localizedStandardCompare(b.name) == .orderedAscending
                 : a.kind.localizedStandardCompare(b.kind) == .orderedAscending
@@ -250,28 +298,37 @@ final class SearchController: NSObject {
 }
 
 extension PaneState {
-    func click(_ item: FileItem, modifiers: NSEvent.ModifierFlags) {
-        if modifiers.contains(.command) {
-            if selection.contains(item.url) { selection.remove(item.url) } else { selection.insert(item.url) }
-            selectionAnchor = item.url
-        } else if modifiers.contains(.shift), let anchor = selectionAnchor,
-                  let start = visibleItems.firstIndex(where: { $0.url == anchor }),
-                  let end = visibleItems.firstIndex(where: { $0.url == item.url }) {
-            selection = Set(visibleItems[min(start, end)...max(start, end)].map(\.url))
-        } else {
-            selection = [item.url]
-            selectionAnchor = item.url
-        }
+    func badge(for url: URL) -> GridBadge? {
+        guard let status = gitStatus?.status(for: url) else { return nil }
+        return GridBadge(symbol: status.symbol, color: status.color)
     }
 
-    func moveSelection(by offset: Int, extend: Bool = false) {
-        let items = visibleItems
-        guard !items.isEmpty else { return }
-        let current = items.lastIndex(where: { selection.contains($0.url) })
-        let next = current.map { max(0, min(items.count - 1, $0 + offset)) } ?? 0
-        let url = items[next].url
-        if extend { selection.insert(url) } else { selection = [url] }
-        selectionAnchor = url
-        if quickLookURL != nil { quickLookURL = url }
+    fileprivate func refreshGitStatus(directory: URL) {
+        Task.detached(priority: .utility) {
+            let snapshot = GitStatusProvider.snapshot(for: directory)
+            await MainActor.run { [weak self] in
+                guard let self, self.url == directory, !self.isSearching else { return }
+                self.gitStatus = snapshot
+            }
+        }
     }
+}
+
+extension GitFileStatus {
+    var color: NSColor {
+        switch self {
+        case .ignored: .systemGray
+        case .untracked: .systemTeal
+        case .deleted, .conflicted: .systemRed
+        case .renamed: .systemBlue
+        case .added: .systemGreen
+        case .modified: .systemOrange
+        }
+    }
+}
+
+struct ItemStats: Equatable {
+    var folders = 0
+    var files = 0
+    var bytes: Int64 = 0
 }
