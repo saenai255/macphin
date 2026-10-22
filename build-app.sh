@@ -12,16 +12,28 @@ if [[ -z "${VERSION:-}" ]]; then
   VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)"
 fi
 VERSION="${VERSION:-0.1.0}"
-# UNIVERSAL=1 builds arm64 + x86_64 (needs Xcode, not just Command Line Tools).
-ARCH_FLAGS=()
-if [[ "${UNIVERSAL:-0}" == "1" ]]; then ARCH_FLAGS=(--arch arm64 --arch x86_64); fi
-swift build -c "$CONFIG" "${ARCH_FLAGS[@]}"
-BIN_DIR="$(swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --show-bin-path)"
+# UNIVERSAL=1 builds arm64 + x86_64. One build per triple: multi-arch builds go through
+# the Xcode build system, which cannot resolve SwiftTerm's build plugin.
+if [[ "${UNIVERSAL:-0}" == "1" ]]; then
+  BIN_DIRS=()
+  for triple in arm64-apple-macosx x86_64-apple-macosx; do
+    swift build -c "$CONFIG" --triple "$triple"
+    BIN_DIRS+=("$(swift build -c "$CONFIG" --triple "$triple" --show-bin-path)")
+  done
+  BIN_DIR="${BIN_DIRS[1]}"
+else
+  swift build -c "$CONFIG"
+  BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
+fi
 
 APP="build/Macphin.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN_DIR/Macphin" "$APP/Contents/MacOS/Macphin"
+if [[ -n "${BIN_DIRS:-}" ]]; then
+  lipo -create "${BIN_DIRS[@]/%//Macphin}" -output "$APP/Contents/MacOS/Macphin"
+else
+  cp "$BIN_DIR/Macphin" "$APP/Contents/MacOS/Macphin"
+fi
 for bundle in "$BIN_DIR"/*.bundle(N); do
   cp -R "$bundle" "$APP/Contents/Resources/"
 done
