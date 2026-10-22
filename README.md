@@ -1,6 +1,54 @@
-# Macphin
+<p align="center">
+  <img src="design/icon-1024.png" width="160" alt="Macphin icon">
+</p>
 
-A native macOS file manager in Swift/SwiftUI, modeled on KDE's [Dolphin](https://github.com/KDE/dolphin).
+<h1 align="center">Macphin</h1>
+
+<p align="center">
+  A Dolphin-style file manager for macOS. Free and open source.
+</p>
+
+<p align="center">
+  <a href="https://github.com/saenai255/macphin/releases/latest">Download</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#keyboard-shortcuts">Shortcuts</a>
+</p>
+
+---
+
+Macphin is a native macOS file manager in Swift/SwiftUI, modeled on KDE's [Dolphin](https://github.com/KDE/dolphin): tabs, split panes, an editable Places panel, a breadcrumb location bar, an embedded terminal and git status badges.
+
+> [!NOTE]
+> Macphin is vibecoded: it was built largely with an AI coding assistant, so expect bugs and rough edges. [Issues](https://github.com/saenai255/macphin/issues) and [pull requests](https://github.com/saenai255/macphin/pulls) are very welcome.
+
+## Install
+
+### Homebrew
+
+```bash
+brew install --cask saenai255/tap/macphin
+```
+
+Update later with `brew upgrade --cask macphin`.
+
+### Manual download
+
+1. Download the latest `Macphin-x.y.z.dmg` from [Releases](https://github.com/saenai255/macphin/releases/latest).
+2. Open it and drag **Macphin** into **Applications**.
+3. Macphin isn't notarized by Apple, so macOS blocks it the first time. Clear the block with:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Macphin.app
+   ```
+
+   Or open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
+
+Requires macOS 15 (Sequoia) or later, on Apple silicon or Intel.
+
+### First launch
+
+macOS asks before Macphin can read Desktop, Documents, Downloads, external drives and network volumes. To browse everything without prompts, grant **Full Disk Access** in **System Settings → Privacy & Security → Full Disk Access**.
 
 ## Features
 
@@ -25,25 +73,9 @@ A native macOS file manager in Swift/SwiftUI, modeled on KDE's [Dolphin](https:/
 - Drag and drop onto folders, breadcrumb segments, tabs, places, and Trash (⌥ forces copy; cross-volume drops copy)
 - Quick Look with Space, show hidden files (⌘⇧.), folders-first sorting, live directory watching
 
-## Build and run
-
-Requires macOS 15+ and a Swift 6 toolchain (Command Line Tools are enough).
-
-```sh
-./build-app.sh          # builds build/Macphin.app (release)
-open build/Macphin.app
-./test.sh               # runs the test suite
-```
-
-`swift run` also works for quick iteration.
-
-The first `./build-app.sh` creates a self-signed "Macphin Local Signing" certificate in its own keychain (`~/Library/Keychains/macphin-signing.keychain-db`) and signs every build with it, so macOS keeps Macphin's privacy permissions (Full Disk Access, Desktop, Documents) across rebuilds. Set `MACPHIN_SIGN_IDENTITY` to use a real Developer ID instead. To regenerate the icon, run `swift scripts/make-icon.swift`.
-
-For UI checks without screen-recording permission, `MACPHIN_SNAPSHOT_DIR=/some/dir build/Macphin.app/Contents/MacOS/Macphin` renders a scripted tour of the UI to PNG files (optionally start in a folder with `MACPHIN_SNAPSHOT_START`). It uses separate preferences and does not change your settings.
-
 ## Using Macphin instead of Finder
 
-Install it with `./build-app.sh --install` (copies to /Applications), then turn on **Settings → Use Macphin instead of Finder**. Folders opened from other apps, the Dock and `open` in Terminal then open in Macphin, and apps send "Show in Finder" here after they are relaunched. Finder itself keeps running because macOS needs it for the Desktop and Trash. Turning the setting off hands everything back to Finder. **Open Macphin at login** is in the same section.
+With Macphin in /Applications, turn on **Settings → Use Macphin instead of Finder**. Folders opened from other apps, the Dock and `open` in Terminal then open in Macphin, and apps send "Show in Finder" here after they are relaunched. Finder itself keeps running because macOS needs it for the Desktop and Trash. Turning the setting off hands everything back to Finder. **Open Macphin at login** is in the same section.
 
 ## Keyboard shortcuts
 
@@ -72,3 +104,19 @@ Install it with `./build-app.sh --install` (copies to /Applications), then turn 
 - Passwords typed in Connect to Server are not saved. smb/afp logins can be saved in the Keychain through the system login prompt.
 - The undo history covers the current app run only, up to 100 steps.
 - The tests move small temporary files to your Trash to exercise trash/undo.
+
+## Uninstall
+
+```bash
+brew uninstall --cask macphin       # if installed with Homebrew
+```
+
+Otherwise, quit Macphin and move it from Applications to the Trash. If you turned on **Use Macphin instead of Finder**, turn it off first so folders open in Finder again.
+
+## Building from source
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+## License
+
+[MIT](LICENSE). Macphin is inspired by KDE's Dolphin but is an independent project, not affiliated with KDE.

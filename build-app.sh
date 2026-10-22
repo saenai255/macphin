@@ -8,8 +8,15 @@ if [[ "${1:-}" == "--install" ]]; then
   shift
 fi
 CONFIG="${1:-release}"
-swift build -c "$CONFIG"
-BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
+if [[ -z "${VERSION:-}" ]]; then
+  VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)"
+fi
+VERSION="${VERSION:-0.1.0}"
+# UNIVERSAL=1 builds arm64 + x86_64 (needs Xcode, not just Command Line Tools).
+ARCH_FLAGS=()
+if [[ "${UNIVERSAL:-0}" == "1" ]]; then ARCH_FLAGS=(--arch arm64 --arch x86_64); fi
+swift build -c "$CONFIG" "${ARCH_FLAGS[@]}"
+BIN_DIR="$(swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --show-bin-path)"
 
 APP="build/Macphin.app"
 rm -rf "$APP"
@@ -31,8 +38,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleExecutable</key><string>Macphin</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>${BUILD_NUMBER:-$VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>CFBundleDocumentTypes</key>
   <array>
@@ -57,7 +64,7 @@ PLIST
 
 sign_app() {
   if [[ -n "${MACPHIN_SIGN_IDENTITY:-}" ]]; then
-    codesign --force --deep --sign "$MACPHIN_SIGN_IDENTITY" "$APP"
+    codesign --force --deep --sign "$MACPHIN_SIGN_IDENTITY" --identifier dev.macphin.Macphin ${KEYCHAIN:+--keychain "$KEYCHAIN"} "$APP"
     return
   fi
   if ! ./scripts/setup-signing.sh; then
